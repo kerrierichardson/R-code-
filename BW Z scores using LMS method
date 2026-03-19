@@ -1,0 +1,115 @@
+# =========================
+# Birthweight z-scores using LMS reference table
+# =========================
+
+library(readr)
+library(dplyr)
+library(janitor)
+library(stringr)
+
+# 1. Load child dataset
+child <- read_csv(file.choose()) %>%
+  clean_names() %>%
+  mutate(
+    ga_weeks = round(ga_total_days_at_birth / 7),
+    sex = case_when(
+      str_to_lower(sex_of_baby) %in% c("m", "male", "boy") ~ "male",
+      str_to_lower(sex_of_baby) %in% c("f", "female", "girl") ~ "female",
+      TRUE ~ NA_character_
+    ),
+    birthweight_for_lms = birthweight_g / 1000
+  )
+
+# 2. Load LMS csv
+
+lms_clean <- read_csv(file.choose()) %>%
+  clean_names()
+
+# 3. Reshape LMS table manually
+lms_male <- lms_clean %>%
+  transmute(
+    ga_weeks = as.numeric(week_month),
+    sex = "male",
+    l = as.numeric(weightmale_l),
+    m = as.numeric(weightmale_m),
+    s = as.numeric(weightmale_s)
+  )
+
+lms_female <- lms_clean %>%
+  transmute(
+    ga_weeks = as.numeric(week_month),
+    sex = "female",
+    l = as.numeric(weightfemale_l),
+    m = as.numeric(weightfemale_m),
+    s = as.numeric(weightfemale_s)
+  )
+
+lms_final <- bind_rows(lms_male, lms_female)
+
+# 4. Check: no duplicate LMS rows
+print(
+  lms_final %>%
+    count(ga_weeks, sex) %>%
+    filter(n > 1)
+)
+
+# 5. Join child data to LMS table
+child3 <- child %>%
+  left_join(lms_final, by = c("ga_weeks", "sex"))
+
+# 6. Check: no duplicate babies after join
+print(
+  child3 %>%
+    count(study_id) %>%
+    filter(n > 1)
+)
+
+# 7. Calculate LMS z-score
+child4 <- child3 %>%
+  mutate(
+    bw_zscore_lms = case_when(
+      is.na(birthweight_for_lms) | is.na(l) | is.na(m) | is.na(s) ~ NA_real_,
+      l == 0 ~ log(birthweight_for_lms / m) / s,
+      TRUE ~ (((birthweight_for_lms / m)^l) - 1) / (l * s)
+    ),
+    bw_zscore_lms = round(bw_zscore_lms, 3)
+  )
+
+# 8. Check output
+print(summary(child4$bw_zscore_lms))
+
+# 9. Export z-score file
+bw_zscore_export <- child4 %>%
+  select(
+    study_id,
+    date_of_birth,
+    ga_total_days_at_birth,
+    ga_weeks,
+    sex_of_baby,
+    birthweight_g,
+    bw_zscore_lms
+  )
+
+write.csv(bw_zscore_export, file = "birthweight_zscores_export.csv", row.names = FALSE)
+
+# Histogram of birthweight z-scores
+hist(
+  child4$bw_zscore_lms,
+  breaks = 30,
+  main = "Histogram of birthweight z-scores",
+  xlab = "Birthweight z-score (LMS)",
+  col = "lightblue",
+  border = "white"
+)
+
+# Optional: save histogram as PNG
+png("birthweight_zscore_histogram.png", width = 1200, height = 800)
+hist(
+  child4$bw_zscore_lms,
+  breaks = 30,
+  main = "Histogram of birthweight z-scores",
+  xlab = "Birthweight z-score (LMS)",
+  col = "lightblue",
+  border = "white"
+)
+dev.off()
